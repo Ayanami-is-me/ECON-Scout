@@ -83,15 +83,47 @@ section[data-testid="stSidebar"] {
     padding: 0.5rem 1rem !important;
     transition: all 0.15s ease !important;
 }
-.stButton > button[kind="primary"] {
+.stButton > button[kind="primary"],
+.stFormSubmitButton > button,
+div[data-testid="stFormSubmitButton"] > button,
+button[kind="primary"],
+button[kind="primaryFormSubmit"],
+button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-primaryFormSubmit"],
+button[data-testid="stBaseButton-primary"],
+button[data-testid="stBaseButton-primaryFormSubmit"] {
     background-color: #065F46 !important;
     color: #FFFFFF !important;
     border: 1px solid #065F46 !important;
     box-shadow: 0 2px 6px rgba(6, 95, 70, 0.18) !important;
 }
-.stButton > button[kind="primary"]:hover {
+.stButton > button[kind="primary"] *,
+.stFormSubmitButton > button *,
+div[data-testid="stFormSubmitButton"] > button *,
+button[kind="primary"] *,
+button[kind="primaryFormSubmit"] *,
+button[data-testid="baseButton-primary"] *,
+button[data-testid="baseButton-primaryFormSubmit"] *,
+button[data-testid="stBaseButton-primary"] *,
+button[data-testid="stBaseButton-primaryFormSubmit"] * {
+    color: #FFFFFF !important;
+}
+.stButton > button[kind="primary"]:hover,
+.stFormSubmitButton > button:hover,
+div[data-testid="stFormSubmitButton"] > button:hover,
+button[kind="primary"]:hover,
+button[kind="primaryFormSubmit"]:hover,
+button[data-testid="baseButton-primary"]:hover,
+button[data-testid="baseButton-primaryFormSubmit"]:hover,
+button[data-testid="stBaseButton-primary"]:hover,
+button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
     background-color: #047857 !important;
     border-color: #047857 !important;
+    color: #FFFFFF !important;
+}
+/* Hide redundant 'Press Enter to submit form' / 'Press Enter to apply' hint */
+div[data-testid="InputInstructions"] {
+    display: none !important;
 }
 .stButton > button[kind="secondary"], .stDownloadButton > button {
     background-color: #FFFFFF !important;
@@ -981,13 +1013,18 @@ if mode == "1. Single-Player Scouting":
         with c_up:
             uploaded_single = st.file_uploader("Upload Profile (.json)", type=["json"], key="single_upload")
             if uploaded_single is not None:
-                try:
-                    loaded_obj = json.load(uploaded_single)
-                    if isinstance(loaded_obj, list) and len(loaded_obj) > 0:
-                        loaded_obj = loaded_obj[0]
-                    st.session_state.profile_editor = json.dumps(loaded_obj, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    st.error(f"Failed to parse JSON: {e}")
+                file_sig = f"{uploaded_single.name}_{uploaded_single.size}"
+                if st.session_state.get("last_single_upload_sig") != file_sig:
+                    try:
+                        loaded_obj = json.load(uploaded_single)
+                        if isinstance(loaded_obj, list) and len(loaded_obj) > 0:
+                            loaded_obj = loaded_obj[0]
+                        st.session_state.profile_editor = json.dumps(loaded_obj, ensure_ascii=False, indent=2)
+                        st.session_state.last_single_upload_sig = file_sig
+                    except Exception as e:
+                        st.error(f"Failed to parse JSON: {e}")
+            else:
+                st.session_state.last_single_upload_sig = None
 
         with c_sel:
             sample_choice = st.selectbox("Preset Sample", list(SAMPLE_PLAYERS.keys()))
@@ -1240,13 +1277,18 @@ elif mode == "2. L4 Canary Audit (4-Agent)":
         with u1:
             up_c = st.file_uploader("Upload Profile (.json)", type=["json"], key="canary_single_up")
             if up_c is not None:
-                try:
-                    obj = json.load(up_c)
-                    if isinstance(obj, list) and len(obj) > 0:
-                        obj = obj[0]
-                    st.session_state.canary_editor = json.dumps(obj, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    st.error(f"Parse error: {e}")
+                c_sig = f"{up_c.name}_{up_c.size}"
+                if st.session_state.get("last_canary_upload_sig") != c_sig:
+                    try:
+                        obj = json.load(up_c)
+                        if isinstance(obj, list) and len(obj) > 0:
+                            obj = obj[0]
+                        st.session_state.canary_editor = json.dumps(obj, ensure_ascii=False, indent=2)
+                        st.session_state.last_canary_upload_sig = c_sig
+                    except Exception as e:
+                        st.error(f"Parse error: {e}")
+            else:
+                st.session_state.last_canary_upload_sig = None
         with u2:
             c_sample = st.selectbox("Preset Sample", list(SAMPLE_PLAYERS.keys()), key="canary_sel")
             if c_sample != st.session_state.last_canary_sample:
@@ -1329,11 +1371,31 @@ elif mode == "2. L4 Canary Audit (4-Agent)":
                     if apply_c_anon:
                         p, _ = anonymize_profile(p)
                     pid = str(p.get("player_id", f"Player_{idx+1}"))
+                    st.session_state.current_player_id = f"{pid} ({idx + 1}/{len(c_players)} Audit)"
                     st_msg.caption(f"Auditing ({idx + 1}/{len(c_players)}): {pid}")
                     p_str = json.dumps(p, ensure_ascii=False, indent=2)
 
+                    for r in AGENT_SPECS.keys():
+                        st.session_state.agent_states[r] = {"status": "WORKING", "bubble": "Auditing...", "badge": ""}
+                    with office_placeholder:
+                        render_pixel_office(st.session_state.agent_states, active_models, st.session_state.current_player_id)
+
                     res_4 = run_4agent_canary(client, active_models, p_str)
                     audit_jsonl.append(json.dumps({"player_id": pid, "canary_audit": res_4}, ensure_ascii=False))
+
+                    for r, rep in res_4.items():
+                        if "error" in rep:
+                            st.session_state.agent_states[r] = {"status": "ERROR", "bubble": str(rep["error"])[:36], "badge": ""}
+                        else:
+                            c_id = bool(rep.get("can_identify", False))
+                            top1 = rep.get("top3_guesses", ["None"])[0] if isinstance(rep.get("top3_guesses"), list) and rep.get("top3_guesses") else "None"
+                            st.session_state.agent_states[r] = {
+                                "status": "DONE",
+                                "bubble": f"Guess: {top1}",
+                                "badge": "LEAK?" if c_id else "SAFE",
+                            }
+                    with office_placeholder:
+                        render_pixel_office(st.session_state.agent_states, active_models, st.session_state.current_player_id)
 
                     row = {"player_id": pid}
                     any_flag = False
@@ -1421,8 +1483,15 @@ elif mode == "3. Batch Backtest":
                 if apply_batch_anon:
                     p, _ = anonymize_profile(p)
                 pid = str(p.get("player_id", f"Player_{idx+1}"))
+                st.session_state.current_player_id = f"{pid} ({idx + 1}/{len(players)})"
                 status_text.caption(f"Evaluating ({idx + 1}/{len(players)}): {pid}")
                 p_str = json.dumps(p, ensure_ascii=False, indent=2)
+
+                for r in ["tech_scout", "valuation_analyst", "risk_skeptic"]:
+                    st.session_state.agent_states[r] = {"status": "WORKING", "bubble": "Analyzing...", "badge": ""}
+                st.session_state.agent_states["chief_scout"] = {"status": "IDLE", "bubble": "Awaiting reports...", "badge": ""}
+                with office_placeholder:
+                    render_pixel_office(st.session_state.agent_states, active_models, st.session_state.current_player_id)
 
                 with ThreadPoolExecutor(max_workers=3) as ex:
                     f1 = ex.submit(call_poe_json, client, active_models["tech_scout"], AGENT_SPECS["tech_scout"]["prompt"], p_str)
@@ -1430,8 +1499,24 @@ elif mode == "3. Batch Backtest":
                     f3 = ex.submit(call_poe_json, client, active_models["risk_skeptic"], AGENT_SPECS["risk_skeptic"]["prompt"], p_str)
                     reports = {"tech": f1.result(), "valuation": f2.result(), "risk": f3.result()}
 
+                st.session_state.agent_states["tech_scout"] = {"status": "DONE", "bubble": f"Tech: {reports['tech'].get('tech_score', '?')}/10", "badge": ""}
+                st.session_state.agent_states["valuation_analyst"] = {"status": "DONE", "bubble": f"Value: {reports['valuation'].get('value_score', '?')}/10", "badge": ""}
+                st.session_state.agent_states["risk_skeptic"] = {"status": "DONE", "bubble": f"Risk: {reports['risk'].get('bust_risk_score', '?')}/10", "badge": ""}
+                st.session_state.agent_states["chief_scout"] = {"status": "WORKING", "bubble": "Synthesizing...", "badge": ""}
+                with office_placeholder:
+                    render_pixel_office(st.session_state.agent_states, active_models, st.session_state.current_player_id)
+
                 chair_in = f"[ANONYMIZED PROFILE]\n{p_str}\n\n[SPECIALIST REPORTS]\n{json.dumps(reports, ensure_ascii=False)}"
                 final = call_poe_json(client, active_models["chief_scout"], AGENT_SPECS["chief_scout"]["prompt"], chair_in)
+
+                dec = str(final.get("decision", "PASS")).upper()
+                st.session_state.agent_states["chief_scout"] = {
+                    "status": "DONE",
+                    "bubble": f"Score: {final.get('investment_score', '?')}/100",
+                    "badge": dec if dec in ["BUY", "PASS"] else "",
+                }
+                with office_placeholder:
+                    render_pixel_office(st.session_state.agent_states, active_models, st.session_state.current_player_id)
 
                 record = {"player_id": pid, "reports": reports, "final": final}
                 results_jsonl.append(json.dumps(record, ensure_ascii=False))
@@ -1621,6 +1706,31 @@ elif mode == "4. Backtest Evaluation":
                     "Alpha_vs_BuyAll": f"{(bot_k_mult - all_mult) * 100:+.1f}%",
                 },
             ])
+
+            # Sync Mode 4 Evaluation KPIs to Pixel Studio
+            st.session_state.current_player_id = f"Eval ({total} Players)"
+            st.session_state.agent_states["tech_scout"] = {
+                "status": "DONE",
+                "bubble": f"Accuracy: {accuracy:.1%}\nF1 Score: {f1:.2f}",
+                "badge": "",
+            }
+            st.session_state.agent_states["valuation_analyst"] = {
+                "status": "DONE",
+                "bubble": f"5Y ROI: {ai_roi_pct:+.1f}%\nAvg: {ai_mult:.2f}x",
+                "badge": "",
+            }
+            st.session_state.agent_states["risk_skeptic"] = {
+                "status": "DONE",
+                "bubble": f"Precision: {precision:.1%}\nHits: {tp}/{tp+fp}",
+                "badge": "",
+            }
+            st.session_state.agent_states["chief_scout"] = {
+                "status": "DONE",
+                "bubble": f"Alpha: {alpha_pct:+.1f}%",
+                "badge": "BUY" if alpha_pct >= 0 else "PASS",
+            }
+            with office_placeholder:
+                render_pixel_office(st.session_state.agent_states, active_models, st.session_state.current_player_id)
 
             st.markdown("### Performance Summary")
             k1, k2, k3, k4 = st.columns(4, gap="medium")
